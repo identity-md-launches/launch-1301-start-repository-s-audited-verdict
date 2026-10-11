@@ -15,22 +15,12 @@ contract SettlerBountyBoundariesTest is TestBase {
         vm.warp(1_800_000_000);
         vm.chainId(11155111);
         token = new MockIMD();
+        weth = new MockIMD();
         intake = new MockIntake();
         burn = new VerdictBurnVault();
         oracle =
             new VerdictOracle(address(intake), address(token), vm.addr(SIGNER_KEY), ACTION, PRICE, address(this), 0);
-        markets = new VerdictMarkets(
-            address(oracle),
-            address(token),
-            treasury,
-            address(burn),
-            address(this),
-            100,
-            50,
-            50,
-            500 ether,
-            type(uint256).max
-        );
+        markets = newMarkets(address(oracle), 100, 50, 50, 500 ether, type(uint256).max);
         markets.setCreatorAllowed(creator, true);
         vm.prank(creator);
         token.approve(address(markets), type(uint256).max);

@@ -58,4 +58,30 @@ contract VerdictImportedAuditTest is TestBase {
         assertEq(markets.claim(id), 98 ether);
         assertConserved(id, true);
     }
+
+    /// @dev Audit 363cc8ba: the allowlist starts on and empty, so a fresh deployment cannot create a market
+    /// until the guardian admits a creator or disables the allowlist. Documented design, no behaviour change.
+    function test_freshDeploymentCannotCreateUntilGuardianActs() public {
+        VerdictMarkets fresh = newMarkets(address(oracle), 100, 50, 50, 500 ether, 0.25 ether);
+        VerdictMarkets.Params memory p = params();
+        vm.prank(creator);
+        token.approve(address(fresh), type(uint256).max);
+        vm.prank(creator);
+        vm.expectRevert(VerdictMarkets.CreatorNotAllowed.selector);
+        fresh.createMarket(p, body, escalationBody, "", 0);
+        vm.expectRevert(VerdictMarkets.CreatorNotAllowed.selector);
+        fresh.createMarket(p, body, escalationBody, "", 0); // Not even the guardian itself.
+        fresh.setCreatorAllowed(creator, true);
+        vm.prank(creator);
+        assertEq(fresh.createMarket(p, body, escalationBody, "", 0), 1);
+    }
+
+    /// @dev Audit 71eb503b: agentId is a caller-supplied label, never checked against the caller.
+    function test_agentIdIsAnUnverifiedLabel() public {
+        uint256 id = create();
+        vm.expectEmit(true, true, true, true, address(markets));
+        emit VerdictMarkets.BetPlaced(id, alice, 1, 1 ether, 999_999);
+        vm.prank(alice);
+        markets.bet(id, 1, 1 ether, 999_999);
+    }
 }

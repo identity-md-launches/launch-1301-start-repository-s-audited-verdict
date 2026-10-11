@@ -122,7 +122,7 @@ contract VerdictLifecycleHandler is TestBase {
         uint256 id = marketSeed % count + 1;
         VerdictMarkets.Market memory m = markets.getMarket(id);
         if (markets.paused() || m.status != VerdictMarkets.Status.Open || block.timestamp >= m.params.closeAt) return;
-        uint256 room = markets.maxPoolPerMarket() - ledger[id].pool;
+        uint256 room = markets.maxPoolPerMarket(0) - ledger[id].pool;
         if (room == 0) return;
         uint256 amount = amountMode % 3 == 1 ? room : bound(amountSeed, 1, room);
         if (amountMode % 3 == 2) amount = bound(amountSeed, 1, room < 200 ? room : 200);
@@ -413,7 +413,7 @@ contract VerdictLifecycleHandler is TestBase {
             assertEq(m.bountyRemaining, g.bounty - g.spend - g.returned);
             assertEq(m.asks, g.asks);
             assertLe(m.asks, 2);
-            assertLe(m.pool, markets.maxPoolPerMarket());
+            assertLe(m.pool, markets.maxPoolPerMarket(0));
             uint256 stakeSum;
             for (uint8 side; side < m.outcomes; ++side) {
                 uint256 sideSum;

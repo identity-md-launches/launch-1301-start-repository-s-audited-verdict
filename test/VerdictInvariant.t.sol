@@ -31,7 +31,7 @@ contract VerdictHandler is TestBase {
         uint256 id = seed % COUNT + 1;
         VerdictMarkets.Market memory m = markets.getMarket(id);
         if (markets.paused() || m.status != VerdictMarkets.Status.Open || block.timestamp >= m.params.closeAt) return;
-        uint256 room = markets.maxPoolPerMarket() - m.pool;
+        uint256 room = markets.maxPoolPerMarket(0) - m.pool;
         if (room == 0) return;
         amount = bound(amount, 1, room < 50 ether ? room : 50 ether);
         betAs(id, user(actor), side ? 1 : 0, amount);

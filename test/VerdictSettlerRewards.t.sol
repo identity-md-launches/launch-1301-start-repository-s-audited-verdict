@@ -252,9 +252,7 @@ contract VerdictSettlerRewardsTest is SettlerRewardsBase {
         createWith(rewardedParams(0.25 ether));
         vm.expectRevert(VerdictMarkets.InvalidParams.selector);
         createWith(rewardedParams(0.25 ether + 1));
-        markets = new VerdictMarkets(
-            address(oracle), address(token), treasury, address(burn), address(this), 100, 50, 50, 500 ether, 0
-        );
+        markets = newMarkets(address(oracle), 100, 50, 50, 500 ether, 0);
         markets.setCreatorAllowed(creator, true);
         vm.prank(creator);
         token.approve(address(markets), type(uint256).max);
@@ -270,18 +268,7 @@ contract VerdictSettlerRewardsTest is SettlerRewardsBase {
         vm.expectRevert(VerdictMarkets.InsufficientBounty.selector);
         createWith(p);
         setPrice(PRICE);
-        markets = new VerdictMarkets(
-            address(oracle),
-            address(token),
-            treasury,
-            address(burn),
-            address(this),
-            100,
-            50,
-            50,
-            500 ether,
-            type(uint256).max
-        );
+        markets = newMarkets(address(oracle), 100, 50, 50, 500 ether, type(uint256).max);
         markets.setCreatorAllowed(creator, true);
         p.settlerReward = type(uint256).max;
         vm.expectRevert(VerdictMarkets.InsufficientBounty.selector);

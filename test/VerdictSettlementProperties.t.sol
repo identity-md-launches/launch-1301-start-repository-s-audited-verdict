@@ -7,18 +7,7 @@ import {OracleAttestation} from "src/OracleAttestation.sol";
 
 contract VerdictSettlementPropertiesTest is TestBase {
     function replaceMarkets(uint16 creatorBps, uint16 burnBps, uint16 treasuryBps, uint256 cap) internal {
-        markets = new VerdictMarkets(
-            address(oracle),
-            address(token),
-            treasury,
-            address(burn),
-            address(this),
-            creatorBps,
-            burnBps,
-            treasuryBps,
-            cap,
-            0.25 ether
-        );
+        markets = newMarkets(address(oracle), creatorBps, burnBps, treasuryBps, cap, 0.25 ether);
         markets.setCreatorAllowed(creator, true);
         address[4] memory users = [creator, alice, bob, carol];
         for (uint256 i; i < users.length; ++i) {

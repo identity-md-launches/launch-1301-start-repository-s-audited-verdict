@@ -322,18 +322,7 @@ contract SettlerIndependentReviewTest is TestBase {
 
     function changingPriceReserve(uint256 nextPrice) internal {
         ReviewChangingPriceOracle changingOracle = new ReviewChangingPriceOracle(address(token), nextPrice);
-        markets = new VerdictMarkets(
-            address(changingOracle),
-            address(token),
-            treasury,
-            address(burn),
-            address(this),
-            100,
-            50,
-            50,
-            500 ether,
-            REVIEW_REWARD
-        );
+        markets = newMarkets(address(changingOracle), 100, 50, 50, 500 ether, REVIEW_REWARD);
         markets.setCreatorAllowed(creator, true);
         vm.prank(creator);
         token.approve(address(markets), type(uint256).max);

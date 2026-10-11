@@ -9,6 +9,11 @@ import {OracleAttestation} from "./OracleAttestation.sol";
 import {IVerdictOracle} from "./interfaces/IVerdictOracle.sol";
 
 /// @notice Immutable parimutuel markets. The guardian controls entry only, never settlement or funds.
+/// @dev Each market takes bets in one of two collateral tokens fixed at construction (slot 0 or slot 1).
+/// Bounties, oracle fees and settler rewards are always held and paid in the oracle's asset (IMD), which
+/// the market records as its bounty token at creation. The two ledgers never mix: the collateral ledger
+/// is pool == payouts + refunds + fees, the bounty ledger is bounty == oracle spend + rewards + returned.
+/// Collateral tokens are plain ERC-20s: there is no native ETH path, receive or fallback.
 contract VerdictMarkets is ReentrancyGuard {
     using SafeERC20 for IERC20;
 
@@ -36,6 +41,16 @@ contract VerdictMarkets is ReentrancyGuard {
         bytes32[] keys;
         uint256 bounty;
         uint256 settlerReward;
+        uint8 collateralId;
+    }
+
+    /// @notice One of the two fixed collateral slots.
+    struct Collateral {
+        IERC20 token;
+        uint16 creatorFeeBps;
+        uint16 burnFeeBps;
+        uint16 treasuryFeeBps;
+        uint256 maxPoolPerMarket;
     }
 
     struct Market {
@@ -66,11 +81,14 @@ contract VerdictMarkets is ReentrancyGuard {
         uint256 escalationAskedAt;
         uint256 settlerReward;
         uint256 rewardsPaid;
+        IERC20 collateral;
+        IERC20 bountyToken;
     }
 
     error InvalidAddress();
     error InvalidFees();
     error InvalidCap();
+    error InvalidCollateral();
     error NotGuardian();
     error NotPendingGuardian();
     error EntryPaused();
@@ -111,7 +129,8 @@ contract VerdictMarkets is ReentrancyGuard {
         bytes body,
         bytes escalationBody,
         string uri,
-        uint256 agentId
+        uint256 agentId,
+        address collateral
     );
     event BetPlaced(uint256 indexed id, address indexed bettor, uint8 indexed outcome, uint256 amount, uint256 agentId);
     event OracleAsked(uint256 indexed id, bytes32 indexed intakeRequestId, bool escalation, uint256 price);
@@ -131,14 +150,20 @@ contract VerdictMarkets is ReentrancyGuard {
     event Claimed(uint256 indexed id, address indexed bettor, uint256 amount, bool refund);
 
     IVerdictOracle public immutable oracle;
-    IERC20 public immutable collateral;
     address public immutable treasury;
     address public immutable burnSink;
-    uint16 public immutable creatorFeeBps;
-    uint16 public immutable burnFeeBps;
-    uint16 public immutable treasuryFeeBps;
-    uint256 public immutable maxPoolPerMarket;
     uint256 public immutable maxSettlerReward;
+
+    IERC20 private immutable _token0;
+    uint16 private immutable _creatorFeeBps0;
+    uint16 private immutable _burnFeeBps0;
+    uint16 private immutable _treasuryFeeBps0;
+    uint256 private immutable _maxPoolPerMarket0;
+    IERC20 private immutable _token1;
+    uint16 private immutable _creatorFeeBps1;
+    uint16 private immutable _burnFeeBps1;
+    uint16 private immutable _treasuryFeeBps1;
+    uint256 private immutable _maxPoolPerMarket1;
 
     address public guardian;
     address public pendingGuardian;
@@ -154,31 +179,43 @@ contract VerdictMarkets is ReentrancyGuard {
 
     constructor(
         address oracle_,
-        address collateral_,
         address treasury_,
         address burnSink_,
         address guardian_,
-        uint16 creatorFeeBps_,
-        uint16 burnFeeBps_,
-        uint16 treasuryFeeBps_,
-        uint256 maxPoolPerMarket_,
+        address token0,
+        uint16 creatorBps0,
+        uint16 burnBps0,
+        uint16 treasuryBps0,
+        uint256 maxPool0,
+        address token1,
+        uint16 creatorBps1,
+        uint16 burnBps1,
+        uint16 treasuryBps1,
+        uint256 maxPool1,
         uint256 maxSettlerReward_
     ) {
         if (
-            oracle_ == address(0) || collateral_ == address(0) || treasury_ == address(0) || burnSink_ == address(0)
-                || guardian_ == address(0)
+            oracle_ == address(0) || treasury_ == address(0) || burnSink_ == address(0) || guardian_ == address(0)
+                || token0 == address(0) || token1 == address(0)
         ) revert InvalidAddress();
-        if (uint256(creatorFeeBps_) + burnFeeBps_ + treasuryFeeBps_ > 500) revert InvalidFees();
-        if (maxPoolPerMarket_ == 0) revert InvalidCap();
+        if (token0 == token1) revert InvalidCollateral();
+        if (uint256(creatorBps0) + burnBps0 + treasuryBps0 > 500) revert InvalidFees();
+        if (uint256(creatorBps1) + burnBps1 + treasuryBps1 > 500) revert InvalidFees();
+        if (maxPool0 == 0 || maxPool1 == 0) revert InvalidCap();
         oracle = IVerdictOracle(oracle_);
-        collateral = IERC20(collateral_);
         treasury = treasury_;
         burnSink = burnSink_;
         guardian = guardian_;
-        creatorFeeBps = creatorFeeBps_;
-        burnFeeBps = burnFeeBps_;
-        treasuryFeeBps = treasuryFeeBps_;
-        maxPoolPerMarket = maxPoolPerMarket_;
+        _token0 = IERC20(token0);
+        _creatorFeeBps0 = creatorBps0;
+        _burnFeeBps0 = burnBps0;
+        _treasuryFeeBps0 = treasuryBps0;
+        _maxPoolPerMarket0 = maxPool0;
+        _token1 = IERC20(token1);
+        _creatorFeeBps1 = creatorBps1;
+        _burnFeeBps1 = burnBps1;
+        _treasuryFeeBps1 = treasuryBps1;
+        _maxPoolPerMarket1 = maxPool1;
         maxSettlerReward = maxSettlerReward_;
         emit GuardianTransferred(address(0), guardian_);
     }
@@ -191,6 +228,37 @@ contract VerdictMarkets is ReentrancyGuard {
     modifier entryOpen() {
         if (paused) revert EntryPaused();
         _;
+    }
+
+    /// @notice The fixed configuration of collateral slot 0 or 1. Reverts for any other slot.
+    function collateralConfig(uint8 slot) public view returns (Collateral memory c) {
+        if (slot == 0) {
+            return Collateral(_token0, _creatorFeeBps0, _burnFeeBps0, _treasuryFeeBps0, _maxPoolPerMarket0);
+        }
+        if (slot == 1) {
+            return Collateral(_token1, _creatorFeeBps1, _burnFeeBps1, _treasuryFeeBps1, _maxPoolPerMarket1);
+        }
+        revert InvalidCollateral();
+    }
+
+    function collateral(uint8 slot) external view returns (IERC20) {
+        return collateralConfig(slot).token;
+    }
+
+    function creatorFeeBps(uint8 slot) external view returns (uint16) {
+        return collateralConfig(slot).creatorFeeBps;
+    }
+
+    function burnFeeBps(uint8 slot) external view returns (uint16) {
+        return collateralConfig(slot).burnFeeBps;
+    }
+
+    function treasuryFeeBps(uint8 slot) external view returns (uint16) {
+        return collateralConfig(slot).treasuryFeeBps;
+    }
+
+    function maxPoolPerMarket(uint8 slot) external view returns (uint256) {
+        return collateralConfig(slot).maxPoolPerMarket;
     }
 
     function pause() external onlyGuardian {
@@ -241,6 +309,11 @@ contract VerdictMarkets is ReentrancyGuard {
         emit GuardianTransferred(previous, address(0));
     }
 
+    /// @notice Creates a market that takes bets in collateral slot `p.collateralId` (0 or 1).
+    /// @dev The bounty `p.bounty` is pulled in the oracle's current asset (IMD), never in the collateral,
+    /// and that token is recorded as the market's bounty token for every later oracle fee and reward.
+    /// @param agentId A caller-supplied label emitted in `MarketCreated` for attribution. It is NOT a verified
+    /// identity: nothing ties it to `msg.sender`, a registry or a signature, and any caller may pass any value.
     function createMarket(
         Params calldata p,
         bytes calldata body,
@@ -250,14 +323,16 @@ contract VerdictMarkets is ReentrancyGuard {
     ) external nonReentrant entryOpen returns (uint256 id) {
         if (allowlistOn && !allowedCreators[msg.sender]) revert CreatorNotAllowed();
         uint8 outcomes = _validateParams(p);
+        IERC20 collateralToken = collateralConfig(p.collateralId).token;
         if (body.length == 0 || body.length > 16_384 || escalationBody.length > 16_384) revert InvalidBody();
         bytes32 bodyHash = keccak256(body);
         bytes32 escalationHash = escalationBody.length == 0 ? bytes32(0) : keccak256(escalationBody);
         if (bodyHash == escalationHash) revert InvalidBody();
-        if (oracle.asset() != address(collateral)) revert OracleAssetMismatch();
+        IERC20 bountyToken = IERC20(oracle.asset());
+        if (address(bountyToken) == address(0)) revert OracleAssetMismatch();
         uint256 cost = oracle.price();
         _checkBounty(p.bounty, cost, p.settlerReward);
-        uint256 received = _pull(msg.sender, p.bounty);
+        uint256 received = _pull(bountyToken, msg.sender, p.bounty);
         _checkBounty(received, cost, p.settlerReward);
         id = ++marketCount;
         Market storage m = _markets[id];
@@ -269,16 +344,24 @@ contract VerdictMarkets is ReentrancyGuard {
         m.outcomes = outcomes;
         m.bountyRemaining = received;
         m.settlerReward = p.settlerReward;
-        emit MarketCreated(id, msg.sender, bodyHash, escalationHash, body, escalationBody, uri, agentId);
+        m.collateral = collateralToken;
+        m.bountyToken = bountyToken;
+        emit MarketCreated(
+            id, msg.sender, bodyHash, escalationHash, body, escalationBody, uri, agentId, address(collateralToken)
+        );
     }
 
+    /// @notice Bets `amount` of the market's collateral token on `outcome`.
+    /// @param agentId A caller-supplied label emitted in `BetPlaced` for attribution. It is NOT a verified
+    /// identity: nothing ties it to `msg.sender`, a registry or a signature, and any caller may pass any value.
     function bet(uint256 id, uint8 outcome, uint256 amount, uint256 agentId) external nonReentrant entryOpen {
         Market storage m = _market(id);
         if (m.status != Status.Open) revert WrongState();
         if (block.timestamp >= m.params.closeAt) revert OutsideWindow();
         if (outcome >= m.outcomes) revert InvalidOutcome();
-        uint256 received = _pull(msg.sender, amount);
-        if (received > maxPoolPerMarket - m.pool) revert PoolCapExceeded();
+        Collateral memory c = collateralConfig(m.params.collateralId);
+        uint256 received = _pull(c.token, msg.sender, amount);
+        if (received > c.maxPoolPerMarket - m.pool) revert PoolCapExceeded();
         m.pool += received;
         outcomePool[id][outcome] += received;
         stakes[id][msg.sender][outcome] += received;
@@ -298,7 +381,7 @@ contract VerdictMarkets is ReentrancyGuard {
         }
         m.lastPrimaryAsk = block.timestamp;
         requestId = _ask(id, m, body, false);
-        _pay(msg.sender, _recordSettlerReward(id, m, 0));
+        _pay(m.bountyToken, msg.sender, _recordSettlerReward(id, m, 0));
     }
 
     function escalate(uint256 id, bytes calldata body) external nonReentrant returns (bytes32 requestId) {
@@ -333,10 +416,10 @@ contract VerdictMarkets is ReentrancyGuard {
         bytes32 intakeRequestId = oracle.intakeRequestOf(a.requestId);
         if (replacement) {
             if (!m.escalationAsked || intakeRequestId != m.escalationRequest) revert UnauthenticatedAnswer();
-        } else if (
-            m.asks == 0
-                || (intakeRequestId != m.primaryRequests[0] && (m.asks < 2 || intakeRequestId != m.primaryRequests[1]))
-        ) {
+        } else if (m.asks == 0 || intakeRequestId != m.primaryRequests[m.asks - 1]) {
+            // Only the market's most recent paid primary ask can establish the outcome. A retry is
+            // bought blind while the first ask is still pending, so once it exists a late answer to the
+            // first ask can no longer compete with it and no proposer can choose between two answers.
             revert UnauthenticatedAnswer();
         }
         Params storage p = m.params;
@@ -356,7 +439,7 @@ contract VerdictMarkets is ReentrancyGuard {
         // A replacement restarts a full dispute window exactly once.
         m.disputeEnds = block.timestamp + p.disputeWindow;
         emit OutcomeProposed(id, a.requestId, m.outcome, a.panelSize, replacement, m.disputeEnds);
-        _pay(msg.sender, _recordSettlerReward(id, m, 1));
+        _pay(m.bountyToken, msg.sender, _recordSettlerReward(id, m, 1));
     }
 
     function finalize(uint256 id) external nonReentrant {
@@ -365,9 +448,10 @@ contract VerdictMarkets is ReentrancyGuard {
         if (block.timestamp < m.disputeEnds) revert OutsideWindow();
         uint256 winningPool = outcomePool[id][m.outcome];
         if (winningPool == 0) revert NoWinningStake();
-        uint256 creatorFee = Math.mulDiv(m.pool, creatorFeeBps, 10_000);
-        uint256 burnFee = Math.mulDiv(m.pool, burnFeeBps, 10_000);
-        uint256 treasuryFee = Math.mulDiv(m.pool, treasuryFeeBps, 10_000);
+        Collateral memory c = collateralConfig(m.params.collateralId);
+        uint256 creatorFee = Math.mulDiv(m.pool, c.creatorFeeBps, 10_000);
+        uint256 burnFee = Math.mulDiv(m.pool, c.burnFeeBps, 10_000);
+        uint256 treasuryFee = Math.mulDiv(m.pool, c.treasuryFeeBps, 10_000);
         m.status = Status.Finalized;
         m.fees = creatorFee + burnFee + treasuryFee;
         m.remainingPayout = m.pool - m.fees;
@@ -375,10 +459,16 @@ contract VerdictMarkets is ReentrancyGuard {
         uint256 reward = _recordSettlerReward(id, m, 2);
         uint256 bounty = _releaseBounty(id, m);
         emit Finalized(id, m.outcome, creatorFee, burnFee, treasuryFee);
-        _pay(msg.sender, reward);
-        _pay(m.creator, creatorFee + bounty);
-        _pay(burnSink, burnFee);
-        _pay(treasury, treasuryFee);
+        IERC20 bountyToken = m.bountyToken;
+        _pay(bountyToken, msg.sender, reward);
+        if (c.token == bountyToken) {
+            _pay(c.token, m.creator, creatorFee + bounty);
+        } else {
+            _pay(c.token, m.creator, creatorFee);
+            _pay(bountyToken, m.creator, bounty);
+        }
+        _pay(c.token, burnSink, burnFee);
+        _pay(c.token, treasury, treasuryFee);
     }
 
     function voidMarket(uint256 id) external nonReentrant {
@@ -396,11 +486,12 @@ contract VerdictMarkets is ReentrancyGuard {
         uint256 reward = _recordSettlerReward(id, m, 3);
         uint256 bounty = _releaseBounty(id, m);
         emit Voided(id);
-        _pay(msg.sender, reward);
-        _pay(m.creator, bounty);
+        _pay(m.bountyToken, msg.sender, reward);
+        _pay(m.bountyToken, m.creator, bounty);
     }
 
     /// @notice Winners claim payouts; after voiding, every bettor claims their full credited deposits.
+    /// Both are paid in the market's collateral token.
     function claim(uint256 id) external nonReentrant returns (uint256 amount) {
         Market storage m = _market(id);
         if (claimed[id][msg.sender]) revert NothingToClaim();
@@ -422,7 +513,7 @@ contract VerdictMarkets is ReentrancyGuard {
         }
         claimed[id][msg.sender] = true;
         emit Claimed(id, msg.sender, amount, refund);
-        _pay(msg.sender, amount);
+        _pay(m.collateral, msg.sender, amount);
     }
 
     function getMarket(uint256 id) external view returns (Market memory) {
@@ -442,17 +533,18 @@ contract VerdictMarkets is ReentrancyGuard {
         private
         returns (bytes32 requestId)
     {
-        if (oracle.asset() != address(collateral)) revert OracleAssetMismatch();
+        IERC20 bountyToken = m.bountyToken;
+        if (oracle.asset() != address(bountyToken)) revert OracleAssetMismatch();
         uint256 cost = oracle.price();
         if (cost > m.bountyRemaining) revert InsufficientBounty();
         m.asks++;
         m.bountyRemaining -= cost;
         m.oracleSpend += cost;
-        uint256 beforeBalance = collateral.balanceOf(address(this));
-        collateral.forceApprove(address(oracle), cost);
+        uint256 beforeBalance = bountyToken.balanceOf(address(this));
+        bountyToken.forceApprove(address(oracle), cost);
         requestId = oracle.request(body);
-        collateral.forceApprove(address(oracle), 0);
-        if (collateral.balanceOf(address(this)) != beforeBalance - cost) revert InexactOracleSpend();
+        bountyToken.forceApprove(address(oracle), 0);
+        if (bountyToken.balanceOf(address(this)) != beforeBalance - cost) revert InexactOracleSpend();
         if (escalation) m.escalationRequest = requestId;
         else m.primaryRequests[m.asks - 1] = requestId;
         emit OracleAsked(id, requestId, escalation, cost);
@@ -483,16 +575,16 @@ contract VerdictMarkets is ReentrancyGuard {
         emit BountyReturned(id, m.creator, bounty);
     }
 
-    function _pull(address from, uint256 amount) private returns (uint256 received) {
+    function _pull(IERC20 token, address from, uint256 amount) private returns (uint256 received) {
         if (amount == 0) revert InvalidAmount();
-        uint256 beforeBalance = collateral.balanceOf(address(this));
-        collateral.safeTransferFrom(from, address(this), amount);
-        received = collateral.balanceOf(address(this)) - beforeBalance;
+        uint256 beforeBalance = token.balanceOf(address(this));
+        token.safeTransferFrom(from, address(this), amount);
+        received = token.balanceOf(address(this)) - beforeBalance;
         if (received == 0) revert InvalidAmount();
     }
 
-    function _pay(address to, uint256 amount) private {
-        if (amount != 0) collateral.safeTransfer(to, amount);
+    function _pay(IERC20 token, address to, uint256 amount) private {
+        if (amount != 0) token.safeTransfer(to, amount);
     }
 
     function _validateParams(Params calldata p) private view returns (uint8 outcomes) {
@@ -504,6 +596,7 @@ contract VerdictMarkets is ReentrancyGuard {
         ) {
             revert InvalidParams();
         }
+        if (p.collateralId > 1) revert InvalidCollateral();
         if (p.answerType == 0) {
             if (p.bounds.length != 0 || p.keys.length != 0) revert InvalidParams();
             return 2;

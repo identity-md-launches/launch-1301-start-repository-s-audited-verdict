@@ -76,7 +76,7 @@ contract SettlerRewardSequenceHandler is TestBase {
         uint256 id = seed % count + 1;
         VerdictMarkets.Market memory m = markets.getMarket(id);
         if (markets.paused() || m.status != VerdictMarkets.Status.Open || block.timestamp >= m.params.closeAt) return;
-        uint256 room = markets.maxPoolPerMarket() - m.pool;
+        uint256 room = markets.maxPoolPerMarket(0) - m.pool;
         if (room == 0) return;
         uint256 amount = bound(amountSeed, 1, room);
         uint256 beforeBalance = token.balanceOf(address(markets));
@@ -149,6 +149,8 @@ contract SettlerRewardSequenceHandler is TestBase {
             }
         } else if (m.status != VerdictMarkets.Status.Open || block.timestamp >= m.params.voidAfter) {
             return;
+        } else if (oracle.intakeRequestOf(a.requestId) != m.primaryRequests[m.asks - 1]) {
+            return; // Only the most recent paid primary ask can establish the outcome.
         }
         _action(id, actor, 1, abi.encodeCall(markets.propose, (id, a)), 0);
         if (replacement) ++replacements;
@@ -371,7 +373,7 @@ contract SettlerRewardSequenceHandler is TestBase {
             assertEq(m.paidOut + m.refunded + m.fees + m.oracleSpend + m.rewardsPaid + m.returnedBounty, exited[id]);
             assertEq(m.bountyRemaining + m.oracleSpend + m.rewardsPaid + m.returnedBounty, bountyDeposited[id]);
             assertLe(m.asks, 2);
-            assertLe(m.pool, markets.maxPoolPerMarket());
+            assertLe(m.pool, markets.maxPoolPerMarket(0));
             assertLe(m.rewardsPaid, 5 * m.settlerReward);
             if (terminalStatus[id] != 0) {
                 assertEq(uint8(m.status), terminalStatus[id], "terminal market reopened");

@@ -14,12 +14,18 @@ abstract contract TestBase is Test {
     uint256 internal constant PRICE = 0.5 ether;
     bytes32 internal constant ACTION = bytes32("oracle.request@oracle-1");
     bytes32 internal constant QUESTION = keccak256("precisely defined question");
+    /// @dev Slot 1 mirrors the launch's WETH slot: 1.5% creator, no burn, 1% treasury, 1 WETH cap.
+    uint16 internal constant WETH_CREATOR_BPS = 150;
+    uint16 internal constant WETH_BURN_BPS = 0;
+    uint16 internal constant WETH_TREASURY_BPS = 100;
+    uint256 internal constant WETH_CAP = 1 ether;
     address internal creator = makeAddr("creator");
     address internal alice = makeAddr("alice");
     address internal bob = makeAddr("bob");
     address internal carol = makeAddr("carol");
     address internal treasury = makeAddr("treasury");
     MockIMD internal token;
+    MockIMD internal weth;
     MockIntake internal intake;
     VerdictOracle internal oracle;
     VerdictMarkets internal markets;
@@ -32,22 +38,51 @@ abstract contract TestBase is Test {
         vm.warp(1_800_000_000);
         vm.chainId(11155111);
         token = new MockIMD();
+        weth = new MockIMD();
         intake = new MockIntake();
         oracle =
             new VerdictOracle(address(intake), address(token), vm.addr(SIGNER_KEY), ACTION, PRICE, address(this), 0);
         burn = new VerdictBurnVault();
-        markets = new VerdictMarkets(
-            address(oracle), address(token), treasury, address(burn), address(this), 100, 50, 50, 500 ether, 0.25 ether
-        );
+        markets = newMarkets(address(oracle), 100, 50, 50, 500 ether, 0.25 ether);
         markets.setCreatorAllowed(creator, true);
         address[5] memory users = [address(this), creator, alice, bob, carol];
         for (uint256 i; i < users.length; i++) {
             token.mint(users[i], 1_000_000 ether);
+            weth.mint(users[i], 1_000_000 ether);
             vm.startPrank(users[i]);
             token.approve(address(markets), type(uint256).max);
             token.approve(address(oracle), type(uint256).max);
+            weth.approve(address(markets), type(uint256).max);
             vm.stopPrank();
         }
+    }
+
+    /// @dev Slot 0 is IMD with the given terms; slot 1 is always the WETH double with the launch's WETH terms.
+    function newMarkets(
+        address oracle_,
+        uint16 creatorBps,
+        uint16 burnBps,
+        uint16 treasuryBps,
+        uint256 cap,
+        uint256 maxReward
+    ) internal returns (VerdictMarkets) {
+        return new VerdictMarkets(
+            oracle_,
+            treasury,
+            address(burn),
+            address(this),
+            address(token),
+            creatorBps,
+            burnBps,
+            treasuryBps,
+            cap,
+            address(weth),
+            WETH_CREATOR_BPS,
+            WETH_BURN_BPS,
+            WETH_TREASURY_BPS,
+            WETH_CAP,
+            maxReward
+        );
     }
 
     function params() internal view returns (VerdictMarkets.Params memory p) {
@@ -65,6 +100,7 @@ abstract contract TestBase is Test {
         p.voidAfter = p.answerUntil + 1 hours;
         p.bounty = 2 * PRICE;
         p.settlerReward = 0;
+        p.collateralId = 0;
     }
 
     function create() internal returns (uint256 id) {
@@ -126,11 +162,17 @@ abstract contract TestBase is Test {
         markets.propose(id, a);
     }
 
+    /// @dev Two ledgers per market: the collateral ledger and the bounty-token ledger never mix.
     function assertConserved(uint256 id, bool drained) internal view {
         VerdictMarkets.Market memory m = markets.getMarket(id);
-        uint256 deposits = m.pool + m.params.bounty;
-        uint256 exits = m.paidOut + m.refunded + m.fees + m.oracleSpend + m.returnedBounty;
-        if (drained) assertEq(exits, deposits, "per-market conservation");
-        else assertLe(exits, deposits, "overdrawn market");
+        uint256 collateralExits = m.paidOut + m.refunded + m.fees;
+        uint256 bountyExits = m.oracleSpend + m.rewardsPaid + m.returnedBounty;
+        if (drained) {
+            assertEq(collateralExits, m.pool, "per-market collateral conservation");
+            assertEq(bountyExits, m.params.bounty, "per-market bounty conservation");
+        } else {
+            assertLe(collateralExits, m.pool, "overdrawn collateral");
+            assertLe(bountyExits, m.params.bounty, "overdrawn bounty");
+        }
     }
 }

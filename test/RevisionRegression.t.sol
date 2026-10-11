@@ -88,8 +88,13 @@ contract RevisionRegressionTest is TestBase {
         vm.warp(block.timestamp + 24 hours);
         markets.resolve(first, body);
         assertEq(markets.getMarket(first).asks, 2);
+        bytes32 retryRid = markets.getMarket(first).primaryRequests[1];
         a = attestation(first, abi.encode(false), 5);
-        deliver(firstRid, a); // A late first response still belongs to this market.
+        deliver(firstRid, a); // A late first response is authentic but superseded by the paid retry.
+        vm.expectRevert(VerdictMarkets.UnauthenticatedAnswer.selector);
+        markets.propose(first, a);
+        a = attestation(first, abi.encode(false), 5);
+        deliver(retryRid, a);
         markets.propose(first, a);
         assertEq(markets.getMarket(first).outcome, 0);
     }
@@ -132,7 +137,11 @@ contract RevisionRegressionTest is TestBase {
     }
 
     /// forge-config: default.fuzz.runs = 256
-    function testFuzz_eitherPaidPrimaryRequestCanProposeButCannotReplace(bool retryFirst, bool value) public {
+    /// @dev Audit 94b4f1d1: the two primary asks of one market can be answered differently. Only the most
+    /// recent paid ask may establish the outcome, whatever the delivery order, so no proposer chooses.
+    function testFuzz_onlyLatestPaidPrimaryRequestCanProposeRegardlessOfDeliveryOrder(bool retryFirst, bool value)
+        public
+    {
         uint256 id = create();
         betAs(id, alice, 0, 101);
         betAs(id, bob, 1, 202);
@@ -142,15 +151,18 @@ contract RevisionRegressionTest is TestBase {
         bytes32 retry = markets.resolve(id, body);
         OracleAttestation.Attestation memory accepted = attestation(id, abi.encode(value), 5);
         OracleAttestation.Attestation memory other = attestation(id, abi.encode(!value), 10);
-        deliver(retryFirst ? retry : first, accepted);
-        deliver(retryFirst ? first : retry, other);
-        assertEq(oracle.intakeRequestOf(accepted.requestId), retryFirst ? retry : first);
-        assertEq(oracle.intakeRequestOf(other.requestId), retryFirst ? first : retry);
-        markets.propose(id, accepted);
+        deliver(retryFirst ? retry : first, retryFirst ? accepted : other);
+        deliver(retryFirst ? first : retry, retryFirst ? other : accepted);
+        assertEq(oracle.intakeRequestOf(accepted.requestId), retry);
+        assertEq(oracle.intakeRequestOf(other.requestId), first);
         bytes32 beforeState = keccak256(abi.encode(markets.getMarket(id)));
         vm.expectRevert(VerdictMarkets.UnauthenticatedAnswer.selector);
-        markets.propose(id, other);
+        markets.propose(id, other); // The first ask's answer can no longer compete with the retry.
         assertEq(keccak256(abi.encode(markets.getMarket(id))), beforeState);
+        markets.propose(id, accepted);
+        assertEq(markets.getMarket(id).outcome, value ? 1 : 0);
+        vm.expectRevert(VerdictMarkets.UnauthenticatedAnswer.selector);
+        markets.propose(id, other);
         assertEq(markets.getMarket(id).asks, 2);
         vm.warp(markets.getMarket(id).disputeEnds);
         markets.finalize(id);

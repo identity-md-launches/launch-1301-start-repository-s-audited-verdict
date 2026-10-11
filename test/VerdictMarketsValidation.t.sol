@@ -104,19 +104,13 @@ contract VerdictMarketsValidationTest is TestBase {
 
     function test_feeCapAndPoolCapConstructor() public {
         vm.expectRevert(VerdictMarkets.InvalidFees.selector);
-        new VerdictMarkets(
-            address(oracle), address(token), treasury, address(burn), alice, 100, 200, 201, 1, 0.25 ether
-        );
+        newMarkets(address(oracle), 100, 200, 201, 1, 0.25 ether);
         vm.expectRevert(VerdictMarkets.InvalidFees.selector);
-        new VerdictMarkets(
-            address(oracle), address(token), treasury, address(burn), alice, 65535, 65535, 65535, 1, 0.25 ether
-        );
+        newMarkets(address(oracle), 65535, 65535, 65535, 1, 0.25 ether);
         vm.expectRevert(VerdictMarkets.InvalidCap.selector);
-        new VerdictMarkets(address(oracle), address(token), treasury, address(burn), alice, 100, 50, 50, 0, 0.25 ether);
-        VerdictMarkets maxFees = new VerdictMarkets(
-            address(oracle), address(token), treasury, address(burn), alice, 100, 200, 200, 1, 0.25 ether
-        );
-        assertEq(maxFees.treasuryFeeBps(), 200);
+        newMarkets(address(oracle), 100, 50, 50, 0, 0.25 ether);
+        VerdictMarkets maxFees = newMarkets(address(oracle), 100, 200, 200, 1, 0.25 ether);
+        assertEq(maxFees.treasuryFeeBps(0), 200);
     }
 
     function test_poolCapUsesReceivedBalanceAndFailedBetIsAtomic() public {
@@ -183,7 +177,7 @@ contract VerdictMarketsValidationTest is TestBase {
         uint256 id = create();
         Vm.Log[] memory logs = vm.getRecordedLogs();
         bool found;
-        bytes32 topic = keccak256("MarketCreated(uint256,address,bytes32,bytes32,bytes,bytes,string,uint256)");
+        bytes32 topic = keccak256("MarketCreated(uint256,address,bytes32,bytes32,bytes,bytes,string,uint256,address)");
         for (uint256 i; i < logs.length; i++) {
             if (logs[i].emitter != address(markets) || logs[i].topics[0] != topic) continue;
             (
@@ -191,8 +185,10 @@ contract VerdictMarketsValidationTest is TestBase {
                 bytes memory primaryBody,
                 bytes memory secondBody,
                 string memory uri,
-                uint256 agentId
-            ) = abi.decode(logs[i].data, (bytes32, bytes, bytes, string, uint256));
+                uint256 agentId,
+                address collateralToken
+            ) = abi.decode(logs[i].data, (bytes32, bytes, bytes, string, uint256, address));
+            assertEq(collateralToken, address(token));
             assertEq(uint256(logs[i].topics[1]), id);
             assertEq(logs[i].topics[3], keccak256(body));
             assertEq(escalationHash, keccak256(escalationBody));

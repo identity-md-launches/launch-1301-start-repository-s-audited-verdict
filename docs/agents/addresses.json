@@ -1,0 +1,28 @@
+{
+  "chainId": 11155111,
+  "network": "Sepolia",
+  "note": "Launch after 1296: two-collateral VerdictMarkets. The three contract addresses are written by the deployment handoff once the launch service has deployed them; null means not yet deployed. Never substitute the launch-1296 addresses from web/src/config.ts: that deployment has the old single-collateral ABI.",
+  "contracts": {
+    "VerdictBurnVault": null,
+    "VerdictOracle": null,
+    "VerdictMarkets": null
+  },
+  "external": {
+    "intake": "0xa43e6f75ee006411f79ac1c84120606c2330de82",
+    "imd": "0x44a1cd38474fb1748400e7deb5f8d786cce3f89a",
+    "weth": "0xfff9976782d46cc05630d1f6ebab18b2324d6b14",
+    "oracleSigner": "0x5598aa9146215bc13eb26f2c692ad1461fd32982",
+    "owner": "0x397dacb1ee8e9a8ce5196988958f56bde0a0a312",
+    "actionId": "0x6f7261636c652e72657175657374406f7261636c652d31000000000000000000",
+    "oraclePrice": "500000000000000000"
+  },
+  "collateralSlots": [
+    {"id": 0, "token": "0x44a1cd38474fb1748400e7deb5f8d786cce3f89a", "symbol": "IMD", "creatorFeeBps": 150, "burnFeeBps": 50, "treasuryFeeBps": 50, "maxPoolPerMarket": "500000000000000000000"},
+    {"id": 1, "token": "0xfff9976782d46cc05630d1f6ebab18b2324d6b14", "symbol": "WETH", "creatorFeeBps": 150, "burnFeeBps": 0, "treasuryFeeBps": 100, "maxPoolPerMarket": "1000000000000000000"}
+  ],
+  "abi": {
+    "VerdictMarkets": "docs/agents/abi/VerdictMarkets.json",
+    "VerdictOracle": "docs/agents/abi/VerdictOracle.json",
+    "VerdictBurnVault": "docs/agents/abi/VerdictBurnVault.json"
+  }
+}
