@@ -85,3 +85,35 @@ deposits, not a promise that an arbitrary taxed token pays recipients in full.
 Random testing is bounded, not an exhaustive proof. A failing property must be checked
 against the brief before being classified as an implementation defect. No production
 contract or configuration changes are part of this test contribution.
+
+## Two-collateral adversarial coverage
+
+`CollateralAdversarial.t.sol` probes the edges of the two-slot adaptation rather than its
+happy path: a fuzzed constructor (512 runs) checks each slot's 500 bps ceiling and zero-cap
+rejection independently of the other slot and pins the check order (equal tokens and zero
+tokens are rejected before fees and caps); WETH stakes of one wei against a one-wei cap and the
+last wei of the launch cap; a stake taxed to zero; bets after close, while paused, on an unknown
+outcome or id; a creator rich in WETH but without IMD; a fuzzed WETH fee split (512 runs, any
+schedule up to 500 bps, stakes down to one wei) that must close the WETH ledger without dust
+while the bounty ledger closes in IMD; a WETH double that re-enters `claim`, `finalize`,
+`voidMarket` and `bet` from every finalize payout; claim failure paths; refunds while paused;
+a price rise that clips rewards to zero without touching the WETH pool; and the bounty-token
+snapshot: an IMD-collateral market opened while the oracle's asset is WETH keeps its two ledgers
+in swapped tokens, a WETH/WETH market pays the creator once, a rotation after a proposal still
+finalizes in the recorded token, and a rotation to a token nobody holds cannot open markets or
+reach existing custody. Guardian actions leave both slots untouched, plausible mutator selectors
+do not exist, and the contract refuses native ETH and unknown selectors.
+
+`CollateralRotationInvariant.t.sol` is a second campaign (256 runs of 64 calls). Markets are
+opened during the sequence in either slot while the oracle's asset rotates between IMD and WETH
+and its price moves, so IMD/IMD, WETH/IMD, IMD/WETH and WETH/WETH collateral/bounty pairings
+coexist. Asks against a rotated asset are driven into `OracleAssetMismatch` deliberately. Every
+deposit, oracle payment, reward, fee, bounty return, payout and refund is measured in the token
+it should move in, and the other token is asserted not to move. After every call, the contract's
+IMD balance equals the IMD pools still owed plus the IMD bounties still held, and likewise for
+WETH; the intake holds exactly the oracle spend per token; the settler's balance in the token
+that is not a market's bounty token never changes. After every sequence all markets are settled
+and claimed and both balances must reach zero. A deterministic walk reaches all four pairings,
+the clipped-reward path and WETH-denominated rewards.
+
+No defect was found by these additions; `.imd-findings.json` was therefore not written.
