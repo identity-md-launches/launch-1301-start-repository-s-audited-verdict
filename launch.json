@@ -1,0 +1,42 @@
+{
+  "kind": "evm_contracts",
+  "contracts": [
+    {
+      "contract": "VerdictBurnVault",
+      "constructorArgs": []
+    },
+    {
+      "contract": "VerdictOracle",
+      "constructorArgs": [
+        "0xa43e6f75ee006411f79ac1c84120606c2330de82",
+        "0x44a1cd38474fb1748400e7deb5f8d786cce3f89a",
+        "0x5598aa9146215bc13eb26f2c692ad1461fd32982",
+        "0x6f7261636c652e72657175657374406f7261636c652d31000000000000000000",
+        "500000000000000000",
+        "$owner",
+        "0"
+      ]
+    },
+    {
+      "contract": "VerdictMarkets",
+      "constructorArgs": [
+        "$contract:VerdictOracle",
+        "$owner",
+        "$contract:VerdictBurnVault",
+        "$owner",
+        "0x44a1cd38474fb1748400e7deb5f8d786cce3f89a",
+        "150",
+        "50",
+        "50",
+        "500000000000000000000",
+        "0xfff9976782d46cc05630d1f6ebab18b2324d6b14",
+        "150",
+        "0",
+        "100",
+        "1000000000000000000",
+        "250000000000000000"
+      ]
+    }
+  ],
+  "notes": "Sepolia only (chain 11155111). Deploy VerdictBurnVault, VerdictOracle and VerdictMarkets in this order. $owner resolves to 0x397dacb1ee8e9a8ce5196988958f56bde0a0a312 and controls oracle configuration and the markets guardian role; the same owner receives treasury fees. VerdictBurnVault is a permanent ERC-20 sink. Oracle requests initially cost 0.5 IMD, with a zero configuration delay. Immutable collateral slot 0 is test IMD with creator/burn/treasury fees of 150/50/50 bps and a 500 IMD pool cap; slot 1 is Sepolia WETH with fees of 150/0/100 bps and a 1 WETH pool cap. Bets, payouts, refunds and fees use the selected collateral. Bounties, oracle payments and settler rewards use the oracle asset recorded at market creation, initially IMD; asset changes block further asks for existing markets until the asset matches again. Maximum per-action settler reward is 0.25 IMD. The creator allowlist starts enabled and entry starts unpaused. WETH is used as an ERC-20, with no native ETH path. agentId is a caller-supplied label, not a verified identity. Agent guidance and exact ABIs are in docs/AGENTS.md and docs/agents/abi/; deployment addresses are recorded by the deployment handoff in docs/agents/addresses.json."
+}
